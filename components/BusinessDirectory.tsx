@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Business } from '../types';
 import { searchLocalBusinesses } from '../services/gemini';
@@ -60,7 +61,8 @@ const GENERATE_MOCK = (): Business[] => {
              name = `${prefix} ${city} ${cat.replace('Store', '').trim()}`;
         }
         if (Math.random() > 0.8) name += ` ${Math.floor(Math.random() * 100)}`;
-        const phone = `+25078${Math.floor(Math.random()*9)}${Math.floor(Math.random()*100000 + 100000)}`;
+        const hasPhone = Math.random() > 0.15; // 85% have a phone number
+        const phone = hasPhone ? `+25078${Math.floor(Math.random()*9)}${Math.floor(Math.random()*100000 + 100000)}` : 'N/A';
 
         result.push({
             id: `sim-${i}`,
@@ -69,7 +71,7 @@ const GENERATE_MOCK = (): Business[] => {
             city: city,
             address: `${street}, ${city}`,
             phone: phone,
-            whatsapp: Math.random() > 0.3 ? phone : undefined, // 70% have whatsapp
+            whatsapp: (hasPhone && Math.random() > 0.3) ? phone : undefined, // 70% of those with phones have whatsapp
             status: stat,
             rating: (3 + Math.random() * 2).toFixed(1) as any,
             lat: (city === 'Kigali' ? -1.9 : -2.0) + (Math.random() * 0.1) - 0.05,
@@ -80,12 +82,28 @@ const GENERATE_MOCK = (): Business[] => {
     return result;
 };
 
+
+const getCategoryIcon = (category: string) => {
+    const catLower = category.toLowerCase();
+    if (catLower.includes('pharmacy') || catLower.includes('drugstore') || catLower.includes('medic')) return { icon: 'fas fa-pills', color: 'text-red-500' };
+    if (catLower.includes('hardware') || catLower.includes('tool')) return { icon: 'fas fa-tools', color: 'text-orange-500' };
+    if (catLower.includes('electronic')) return { icon: 'fas fa-plug', color: 'text-blue-500' };
+    if (catLower.includes('repair') || catLower.includes('auto')) return { icon: 'fas fa-wrench', color: 'text-gray-600' };
+    if (catLower.includes('restaurant') || catLower.includes('cafe') || catLower.includes('food') || catLower.includes('bar')) return { icon: 'fas fa-utensils', color: 'text-amber-600' };
+    if (catLower.includes('hotel') || catLower.includes('lodging')) return { icon: 'fas fa-bed', color: 'text-teal-500' };
+    if (catLower.includes('transport') || catLower.includes('travel')) return { icon: 'fas fa-car', color: 'text-purple-500' };
+    if (catLower.includes('store') || catLower.includes('shop')) return { icon: 'fas fa-shopping-bag', color: 'text-pink-500' };
+    if (catLower.includes('bank') || catLower.includes('financ')) return { icon: 'fas fa-university', color: 'text-indigo-600' };
+    return { icon: 'fas fa-building', color: 'text-gray-400' };
+};
+
 export const BusinessDirectory: React.FC<Props> = ({ onNotify }) => {
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [selectedBusiness, setSelectedBusiness] = useState<Business | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState('All');
   const [filterCity, setFilterCity] = useState('All');
+  const [hideNoPhone, setHideNoPhone] = useState(true); // Filter state, enabled by default
   const [visibleCount, setVisibleCount] = useState(20);
   const observer = useRef<IntersectionObserver | null>(null);
   const [showIngestionModal, setShowIngestionModal] = useState(false);
@@ -93,31 +111,17 @@ export const BusinessDirectory: React.FC<Props> = ({ onNotify }) => {
   const [ingestCity, setIngestCity] = useState('Kigali');
   const [isDeepSearchRunning, setIsDeepSearchRunning] = useState(false);
   const [liveSearchLoading, setLiveSearchLoading] = useState(false);
-  const [isMobileDetailOpen, setIsMobileDetailOpen] = useState(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
 
   useEffect(() => {
-    // This now fetches from the "live" API endpoint on component mount
-    const fetchLeads = async () => {
-        try {
-            // In a real app, this URL would be an environment variable
-            // For now, it points to a mock API endpoint but the logic is ready
-            // const response = await fetch('/api/v1/leads'); 
-            // const data = await response.json();
-            // setBusinesses(data);
-            
-            // For now, we continue to use the mock generator until backend is deployed
-            setBusinesses(GENERATE_MOCK());
-            onNotify('Loaded business directory', 'success');
-        } catch (error) {
-            console.error("Failed to fetch leads", error);
-            onNotify('Could not load business directory from backend', 'warning');
-            setBusinesses(GENERATE_MOCK()); // Fallback to mock
-        }
-    };
-    fetchLeads();
+      setBusinesses(GENERATE_MOCK());
+      onNotify('Loaded 8,000+ simulated business records.', 'success');
   }, []);
   
-  const cities = ['All', 'Kigali', 'Musanze', 'Rubavu', 'Huye', 'Rwamagana', 'Rusizi', 'Karongi', 'Muhanga'];
+  const availableCities = React.useMemo(() => {
+    const citySet = new Set(businesses.map(b => b.city));
+    return ['All', ...Array.from(citySet).sort()];
+  }, [businesses]);
 
   const availableCategories = React.useMemo(() => {
     const counts: Record<string, number> = {};
@@ -136,12 +140,13 @@ export const BusinessDirectory: React.FC<Props> = ({ onNotify }) => {
                           b.address.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = filterCategory === 'All' || b.category === filterCategory;
     const matchesCity = filterCity === 'All' || b.city === filterCity;
-    return matchesSearch && matchesCategory && matchesCity;
+    const matchesPhone = !hideNoPhone || (b.phone && b.phone.trim() !== '' && b.phone.trim() !== 'N/A');
+    return matchesSearch && matchesCategory && matchesCity && matchesPhone;
   });
 
   useEffect(() => {
     setVisibleCount(20);
-  }, [searchQuery, filterCategory, filterCity]);
+  }, [searchQuery, filterCategory, filterCity, hideNoPhone]);
 
   const lastElementRef = useCallback((node: HTMLDivElement) => {
     if (observer.current) observer.current.disconnect();
@@ -209,7 +214,7 @@ export const BusinessDirectory: React.FC<Props> = ({ onNotify }) => {
 
   const handleBusinessSelect = (business: Business) => {
     setSelectedBusiness(business);
-    setIsMobileDetailOpen(true);
+    setIsDetailModalOpen(true);
   };
   
   const getStatusColor = (status: string) => {
@@ -222,8 +227,69 @@ export const BusinessDirectory: React.FC<Props> = ({ onNotify }) => {
     }
   };
 
+  const DetailModal = () => {
+    if (!selectedBusiness) return null;
+
+    const { icon, color } = getCategoryIcon(selectedBusiness.category);
+
+    return (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in" onClick={() => setIsDetailModalOpen(false)}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg transform transition-all animate-slide-up" onClick={e => e.stopPropagation()}>
+                <div className="h-48 w-full relative">
+                    <iframe width="100%" height="100%" frameBorder="0" scrolling="no" src={`https://maps.google.com/maps?q=${selectedBusiness.lat},${selectedBusiness.lng}&z=15&output=embed`} title="Location Map" className="rounded-t-2xl"></iframe>
+                </div>
+                <div className="p-6">
+                    <div className="flex justify-between items-start mb-4">
+                        <div>
+                            <div className="flex items-center text-sm text-gray-500 mb-1">
+                                <i className={`${icon} ${color} mr-2`}></i> {selectedBusiness.category}
+                            </div>
+                            <h2 className="text-2xl font-bold text-gray-800 leading-tight">{selectedBusiness.name}</h2>
+                        </div>
+                        <span className={`text-xs font-bold px-3 py-1 rounded-full border ${getStatusColor(selectedBusiness.status)}`}>
+                            {selectedBusiness.status}
+                        </span>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
+                         <a href={`tel:${selectedBusiness.phone}`} className="bg-gray-800 hover:bg-black text-white py-3 rounded-xl font-bold shadow-lg shadow-gray-200 transition-all transform hover:-translate-y-0.5 flex items-center justify-center">
+                            <i className="fas fa-phone-alt mr-2"></i> Call Now
+                        </a>
+                        {selectedBusiness.whatsapp && (
+                           <a href={`https://wa.me/${selectedBusiness.whatsapp.replace(/\+/g, '')}`} target="_blank" rel="noreferrer" className="bg-green-500 hover:bg-green-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-green-200 transition-all transform hover:-translate-y-0.5 flex items-center justify-center">
+                              <i className="fab fa-whatsapp mr-2"></i> WhatsApp
+                           </a>
+                        )}
+                    </div>
+
+                    <div className="space-y-3">
+                         <div className="bg-gray-50 p-3 rounded-lg border border-gray-100">
+                              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Address</label>
+                              <div className="text-sm text-gray-700">{selectedBusiness.address}</div>
+                          </div>
+                          <div className="bg-gray-50 p-3 rounded-lg border border-gray-100">
+                              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Internal Notes</label>
+                              <textarea value={selectedBusiness.notes || ''} onChange={(e) => handleUpdateBusiness(selectedBusiness.id, 'notes', e.target.value)} className="bg-transparent border-none focus:outline-none text-gray-700 text-sm w-full h-20 resize-none" placeholder="Add internal notes here..."/>
+                          </div>
+                    </div>
+                </div>
+                <div className="p-4 bg-gray-50 flex justify-end gap-3 rounded-b-2xl">
+                     <button onClick={() => setIsDetailModalOpen(false)} className="px-4 py-2 text-gray-600 font-medium text-sm hover:bg-gray-200 rounded-lg">Close</button>
+                </div>
+            </div>
+             <style>{`
+                @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+                .animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
+                @keyframes slide-up { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+                .animate-slide-up { animation: slide-up 0.4s ease-out forwards; }
+             `}</style>
+        </div>
+    );
+  };
+
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 h-full flex flex-col overflow-hidden relative">
+      {isDetailModalOpen && <DetailModal />}
       <div className="p-4 border-b border-gray-200 bg-gray-50 flex flex-col gap-4 flex-shrink-0">
         <div className="flex justify-between items-center">
           <div>
@@ -279,128 +345,72 @@ export const BusinessDirectory: React.FC<Props> = ({ onNotify }) => {
                onChange={(e) => setFilterCity(e.target.value)}
                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900 focus:ring-2 focus:ring-indigo-500 outline-none w-1/2 md:w-36"
              >
-               {cities.map(c => <option key={c} value={c}>{c === 'All' ? 'All Cities' : c}</option>)}
+                {availableCities.map(c => <option key={c} value={c}>{c === 'All' ? 'All Cities' : c}</option>)}
              </select>
            </div>
         </div>
-      </div>
-      <div className="flex-1 flex overflow-hidden relative">
-        <div className={`w-full md:w-7/12 lg:w-1/2 flex flex-col border-r border-gray-200 bg-white transition-all duration-300 ${isMobileDetailOpen ? 'hidden md:flex' : 'flex'}`}>
-            <div className="px-4 py-2 border-b border-gray-100 flex justify-between items-center text-xs text-gray-500 flex-shrink-0">
-                <span>Showing {displayedBusinesses.length} of {filteredBusinesses.length} matches</span>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-               {displayedBusinesses.length === 0 ? (
-                   <div className="p-10 text-center text-gray-400">
-                       <i className="fas fa-search text-3xl mb-2 opacity-20"></i>
-                       <p>No businesses found.</p>
-                       <button onClick={() => {setSearchQuery(''); setFilterCategory('All'); setFilterCity('All');}} className="text-indigo-600 text-sm mt-2 hover:underline">Clear Filters</button>
-                   </div>
-               ) : (
-                   <div className="divide-y divide-gray-100">
-                       {displayedBusinesses.map((b, index) => {
-                           const isLast = index === displayedBusinesses.length - 1;
-                           return (
-                               <div 
-                                 key={b.id}
-                                 ref={isLast ? lastElementRef : null}
-                                 onClick={() => handleBusinessSelect(b)}
-                                 className={`p-4 cursor-pointer transition-all hover:bg-indigo-50 ${selectedBusiness?.id === b.id ? 'bg-indigo-50 border-l-4 border-indigo-500' : 'border-l-4 border-transparent'}`}
-                               >
-                                  <div className="flex justify-between items-start mb-2">
-                                     <h3 className={`font-bold text-sm ${selectedBusiness?.id === b.id ? 'text-indigo-900' : 'text-gray-800'}`}>{b.name}</h3>
-                                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${getStatusColor(b.status)}`}>
-                                         {b.status}
-                                     </span>
-                                  </div>
-                                  <div className="text-xs text-gray-500 mb-3 truncate"><i className="fas fa-map-marker-alt mr-2 w-3 text-gray-400"></i> {b.address}</div>
-                                  <div className="flex justify-between items-center">
-                                      <div className="flex gap-2 items-center">
-                                         <div className="flex items-center gap-3">
-                                            <a href={`tel:${b.phone}`} onClick={(e) => e.stopPropagation()} className="flex items-center justify-center w-8 h-8 bg-gray-200 text-gray-600 rounded-full hover:bg-green-500 hover:text-white transition-colors">
-                                                <i className="fas fa-phone-alt"></i>
-                                            </a>
-                                            {b.whatsapp && (
-                                                <a href={`https://wa.me/${b.whatsapp.replace(/\+/g, '')}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="flex items-center justify-center w-8 h-8 bg-gray-200 text-gray-600 rounded-full hover:bg-green-500 hover:text-white transition-colors">
-                                                    <i className="fab fa-whatsapp"></i>
-                                                </a>
-                                            )}
-                                         </div>
-                                      </div>
-                                      <span className="text-[10px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{b.category}</span>
-                                  </div>
-                               </div>
-                           );
-                       })}
-                       {visibleCount < filteredBusinesses.length && (
-                           <div className="p-4 text-center text-gray-400 text-xs flex items-center justify-center">
-                               <i className="fas fa-circle-notch fa-spin mr-2"></i> Loading more...
-                           </div>
-                       )}
-                   </div>
-               )}
-            </div>
+         <div className="flex items-center text-xs text-gray-600 mt-2">
+            <input
+                id="hide-no-phone"
+                type="checkbox"
+                checked={hideNoPhone}
+                onChange={(e) => setHideNoPhone(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <label htmlFor="hide-no-phone" className="ml-2 font-medium">Hide businesses without phone numbers</label>
         </div>
-        <div className={`
-            md:flex flex-col w-full md:w-5/12 lg:w-1/2 bg-gray-100 h-full
-            ${isMobileDetailOpen ? 'fixed inset-0 z-50 flex' : 'hidden'}
-        `}>
-           {selectedBusiness ? (
-               <div className="flex flex-col h-full bg-white md:bg-transparent">
-                  <div className="md:hidden p-4 bg-white border-b border-gray-200 flex items-center shadow-sm z-10">
-                      <button onClick={() => setIsMobileDetailOpen(false)} className="text-gray-600 mr-3">
-                          <i className="fas fa-arrow-left text-xl"></i>
-                      </button>
-                      <h3 className="font-bold text-gray-800 truncate">{selectedBusiness.name}</h3>
-                  </div>
-                  <div className="h-[40%] w-full relative bg-gray-300 shadow-inner flex-shrink-0">
-                      <iframe width="100%" height="100%" frameBorder="0" scrolling="no" src={`https://maps.google.com/maps?q=${selectedBusiness.lat},${selectedBusiness.lng}&z=15&output=embed`} title="Location Map"></iframe>
-                  </div>
-                  <div className="flex-1 p-6 overflow-y-auto bg-white md:rounded-tl-none">
-                      <div className="flex justify-between items-start mb-4">
-                          <div>
-                              <h2 className="text-2xl font-bold text-gray-800 leading-tight">{selectedBusiness.name}</h2>
-                              <div className="flex items-center text-sm text-gray-500 mt-1">
-                                  <i className="fas fa-building mr-2"></i> {selectedBusiness.category}
-                              </div>
-                          </div>
-                          <span className={`text-xs font-bold px-3 py-1 rounded-full border ${getStatusColor(selectedBusiness.status)}`}>
-                              {selectedBusiness.status}
-                          </span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3 mb-6">
-                           <a href={`tel:${selectedBusiness.phone}`} className="bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold shadow-lg shadow-green-200 transition-all transform hover:-translate-y-0.5 flex items-center justify-center">
-                              <i className="fas fa-phone-alt mr-2"></i> Call Now
-                          </a>
-                          {selectedBusiness.whatsapp && (
-                             <a href={`https://wa.me/${selectedBusiness.whatsapp.replace(/\+/g, '')}`} target="_blank" rel="noreferrer" className="bg-green-500 hover:bg-green-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-green-200 transition-all transform hover:-translate-y-0.5 flex items-center justify-center">
-                                <i className="fab fa-whatsapp mr-2"></i> WhatsApp
-                             </a>
-                          )}
-                      </div>
-                      <div className="space-y-4">
-                          <div className="bg-gray-50 p-3 rounded-lg border border-gray-100">
-                              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Primary Phone</label>
-                              <div className="text-gray-900 font-mono text-sm">{selectedBusiness.phone}</div>
-                          </div>
-                          <div className="bg-gray-50 p-3 rounded-lg border border-gray-100">
-                              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Address</label>
-                              <div className="text-sm text-gray-700">{selectedBusiness.address}</div>
-                          </div>
-                          <div className="bg-gray-50 p-3 rounded-lg border border-gray-100">
-                              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Internal Notes</label>
-                              <textarea value={selectedBusiness.notes || ''} onChange={(e) => handleUpdateBusiness(selectedBusiness.id, 'notes', e.target.value)} className="bg-transparent border-none focus:outline-none text-gray-700 text-sm w-full h-20 resize-none" placeholder="Add internal notes here..."/>
-                          </div>
-                      </div>
-                  </div>
+      </div>
+      <div className="flex-1 overflow-y-auto bg-gray-50">
+           {displayedBusinesses.length === 0 ? (
+               <div className="p-10 text-center text-gray-400">
+                   <i className="fas fa-search text-3xl mb-2 opacity-20"></i>
+                   <p>No businesses found.</p>
+                   <button onClick={() => {setSearchQuery(''); setFilterCategory('All'); setFilterCity('All');}} className="text-indigo-600 text-sm mt-2 hover:underline">Clear Filters</button>
                </div>
            ) : (
-               <div className="hidden md:flex flex-col items-center justify-center h-full text-gray-400 bg-gray-50 p-10">
-                   <i className="fas fa-map-marked-alt text-6xl mb-4 opacity-20"></i>
-                   <p className="font-medium">Select a business to view details</p>
+               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 p-4">
+                   {displayedBusinesses.map((b, index) => {
+                       const { icon, color } = getCategoryIcon(b.category);
+                       const isLast = index === displayedBusinesses.length - 1;
+                       return (
+                           <div 
+                             key={b.id}
+                             ref={isLast ? lastElementRef : null}
+                             onClick={() => handleBusinessSelect(b)}
+                             className="bg-white rounded-lg border border-gray-200 shadow-sm hover:shadow-lg hover:border-indigo-300 hover:-translate-y-1 transition-all cursor-pointer flex flex-col"
+                           >
+                              <div className="p-4 flex-1">
+                                <div className="flex justify-between items-start mb-2">
+                                    <div className={`flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center mr-3 bg-gray-100 ${color}`}>
+                                        <i className={icon}></i>
+                                    </div>
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${getStatusColor(b.status)}`}>
+                                        {b.status}
+                                    </span>
+                                </div>
+                                <h3 className="font-bold text-sm text-gray-800 leading-tight mb-1 truncate">{b.name}</h3>
+                                <p className="text-xs text-gray-500 truncate"><i className="fas fa-map-marker-alt mr-1 w-3 text-gray-400"></i> {b.address}</p>
+                              </div>
+                              <div className="p-3 bg-gray-50 border-t border-gray-100 flex justify-end items-center gap-2">
+                                 <a href={`tel:${b.phone}`} onClick={(e) => e.stopPropagation()} className="flex items-center justify-center w-8 h-8 bg-gray-200 text-gray-600 rounded-full hover:bg-gray-800 hover:text-white transition-colors" title="Call">
+                                    <i className="fas fa-phone-alt"></i>
+                                 </a>
+                                 {b.whatsapp && (
+                                    <a href={`https://wa.me/${b.whatsapp.replace(/\+/g, '')}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="flex items-center justify-center w-8 h-8 bg-gray-200 text-gray-600 rounded-full hover:bg-green-500 hover:text-white transition-colors" title="WhatsApp">
+                                        <i className="fab fa-whatsapp"></i>
+                                    </a>
+                                 )}
+                              </div>
+                           </div>
+                       );
+                   })}
                </div>
            )}
-        </div>
+           {visibleCount < filteredBusinesses.length && (
+               <div className="p-4 text-center text-gray-400 text-xs flex items-center justify-center">
+                   <i className="fas fa-circle-notch fa-spin mr-2"></i> Loading more...
+               </div>
+           )}
       </div>
       {showIngestionModal && (
         <div className="absolute inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
